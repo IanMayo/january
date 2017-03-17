@@ -11,14 +11,94 @@ import org.eclipse.january.dataset.Maths;
 import org.eclipse.january.metadata.AxesMetadata;
 import org.eclipse.january.metadata.internal.AxesMetadataImpl;
 import org.eclipse.uomo.units.SI;
+import org.unitsofmeasurement.unit.Unit;
 
 public class AxesMetadataExample {
 
 	public static void main(String[] args) {
 		testDataset();
 		testCompoundDataset();
+		testUnitsAwareOperations();
 	}
 
+	private static class NewMaths extends Maths
+	{
+		public static Dataset multiply(final Object a, final Object b, final Dataset o)
+		{
+			// TODO: check for compliant units?
+			Dataset res = Maths.multiply(a,b,o);
+			
+			// TODO: if there are indices, we need to check they of the same
+			// type, and to do some interpolation if they aren't synced
+			
+			// do the necessary metadata type manipulation for the output set
+			if(a instanceof Dataset && b instanceof Dataset)
+			{
+				Dataset aD = (Dataset) a;
+				Dataset bD = (Dataset) b;
+				UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
+				UomMetadata bMetadata = bD.getFirstMetadata(UomMetadata.class);
+				Unit<?> outUnit = aMetadata.getUnit().multiply(bMetadata.getUnit());
+				res.addMetadata(new UomMetadata(outUnit));
+			}
+			
+			return res;
+		}
+
+		public static Dataset add(final Object a, final Object b, final Dataset o)
+		{
+			// TODO: check for compliant units?
+			Dataset res = Maths.add(a,b,o);
+			
+			// do the necessary metadata type manipulation for the output set
+			if(a instanceof Dataset && b instanceof Dataset)
+			{
+				Dataset aD = (Dataset) a;
+				UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
+				Unit<?> outUnit = aMetadata.getUnit();
+				res.addMetadata(new UomMetadata(outUnit));
+			}
+			return res;
+		}
+
+		public static Dataset subtract(final Object a, final Object b, final Dataset o)
+		{
+			// TODO: check for compliant units?
+			Dataset res = Maths.subtract(a,b,o);
+			
+			// TODO: if there are indices, we need to check they of the same
+			// type, and to do some interpolation if they aren't synced
+			
+			// do the necessary metadata type manipulation for the output set
+			if(a instanceof Dataset && b instanceof Dataset)
+			{
+				Dataset aD = (Dataset) a;
+				UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
+				Unit<?> outUnit = aMetadata.getUnit();
+				res.addMetadata(new UomMetadata(outUnit));
+			}
+			return res;
+		}
+
+		public static Dataset divide(final Object a, final Object b, final Dataset o)
+		{
+			Dataset res = Maths.divide(a,b,o);
+			
+			// do the necessary metadata type manipulation for the output set
+			if(a instanceof Dataset && b instanceof Dataset)
+			{
+				Dataset aD = (Dataset) a;
+				Dataset bD = (Dataset) b;
+				UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
+				UomMetadata bMetadata = bD.getFirstMetadata(UomMetadata.class);
+				Unit<?> outUnit = aMetadata.getUnit().divide(bMetadata.getUnit());
+				res.addMetadata(new UomMetadata(outUnit));
+			}
+			
+			return res;
+		}
+	}
+	
 	private static void testDataset() {
 		// configure Dataset A
 		Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l, 200l, 300l));
@@ -42,6 +122,8 @@ public class AxesMetadataExample {
 		speedsB.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
 		speedsB.setName("speedsB");
 
+		header("Simple operations");
+		
 		// show initial values
 		printTimedDataset(speedsA);
 		printTimedDataset(speedsB);
@@ -53,13 +135,42 @@ public class AxesMetadataExample {
 		// destructive addition (amends speedsA)
 		Dataset sumAB = speedsA.iadd(speedsB);
 		Dataset productAB = speedsA.iadd(speedsB);
-
+		
 		// output results
 		printTimedDataset(speedsA);
 		printTimedDataset(sumAB);
 		printTimedDataset(productAB);
 		printTimedDataset(sumAB2);
 		printTimedDataset(productAB2);
+	}
+	
+	private static void testUnitsAwareOperations()
+	{
+		Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l, 200l, 300l));
+		timestampsA.addMetadata(new UomMetadata(SI.SECOND));
+
+		AxesMetadata axesMetadataA = new AxesMetadataImpl();
+		axesMetadataA.initialize(1);
+		axesMetadataA.setAxis(0, timestampsA);
+
+		Dataset elapsedTime = DatasetFactory.createFromList(Arrays.asList(100l, 200l, 300l));
+		elapsedTime.addMetadata(axesMetadataA);
+		elapsedTime.addMetadata(new UomMetadata(SI.SECOND));
+		elapsedTime.setName("ElapsedTime");
+
+		Dataset speed = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
+		speed.addMetadata(axesMetadataA);
+		speed.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
+		speed.setName("Speed");
+		
+		header("Unit-aware operations");
+
+		printTimedDataset(elapsedTime);
+		printTimedDataset(speed);
+		printTimedDataset(NewMaths.multiply(speed, elapsedTime, null));
+		printTimedDataset(NewMaths.divide(speed, elapsedTime, null));
+		printTimedDataset(NewMaths.add(speed, elapsedTime, null));
+		printTimedDataset(NewMaths.subtract(speed, elapsedTime, null));
 	}
 
 	private static void testCompoundDataset() {
@@ -114,9 +225,15 @@ public class AxesMetadataExample {
 		CompoundDataset sumAB = compoundDatasetA.iadd(compoundDatasetB);
 		sumAB.setName("sumAB");
 
+		header("Compound datasets");
 		printTimedCompoundDataset(sumAB);
 	}
 
+	public static void header(String title)
+	{
+		System.out.println("=== " + title + " ===");
+	}
+	
 	public static void printTimedDataset(Dataset dataset) {
 		printTimedDataset(dataset, dataset.getFirstMetadata(AxesMetadata.class));
 	}
