@@ -16,9 +16,10 @@ import org.unitsofmeasurement.unit.Unit;
 public class AxesMetadataExample {
 
 	public static void main(String[] args) {
-		testDataset();
+		testSimpleOperation();
 		testCompoundDataset();
 		testUnitsAwareOperations();
+		testNonSyncedAxesOperation();
 	}
 
 	private static class NewMaths extends Maths
@@ -99,7 +100,7 @@ public class AxesMetadataExample {
 		}
 	}
 	
-	private static void testDataset() {
+	private static void testSimpleOperation() {
 		// configure Dataset A
 		Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l, 200l, 300l));
 		timestampsA.addMetadata(new UomMetadata(SI.SECOND));
@@ -227,6 +228,39 @@ public class AxesMetadataExample {
 
 		header("Compound datasets");
 		printTimedCompoundDataset(sumAB);
+	}
+	
+	private static void testNonSyncedAxesOperation() {
+		// configure Dataset A
+Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l, 300l, 500l));
+Dataset speedsA = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
+AxesMetadata axesMetadataA = new AxesMetadataImpl();
+axesMetadataA.initialize(1);
+axesMetadataA.setAxis(0, timestampsA);
+speedsA.addMetadata(axesMetadataA);
+speedsA.setName("speedsA");
+
+// configure Dataset B
+Dataset timestampsB = DatasetFactory.createFromList(Arrays.asList(150l, 200l, 250l, 300L, 350L));
+Dataset speedsB = DatasetFactory.createFromList(Arrays.asList(2d, 4d, 8d, 12d, 14d));
+AxesMetadata axesMetadataB = new AxesMetadataImpl();
+axesMetadataB.initialize(1);
+axesMetadataB.setAxis(0, timestampsB);
+speedsB.addMetadata(axesMetadataB);
+speedsB.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
+speedsB.setName("speedsB");
+
+		header("Non synced operations");
+		
+		// show initial values
+		printTimedDataset(speedsA);
+		printTimedDataset(speedsB);
+
+		// non-destructive addition (loses units)
+		Dataset sumAB2 = Maths.add(speedsA, speedsB);
+		
+		printTimedDataset(sumAB2);
+
 	}
 
 	public static void header(String title)
