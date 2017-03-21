@@ -24,6 +24,11 @@ import org.junit.Test;
 public class AxesMetadataExample
 {
 
+  public static interface OperationPerformer
+  {
+    public Dataset perform(final Object a, final Object b, final Dataset o);
+  }
+  
   /**
    * experiment with extending maths processing to be AxesMetadata aware
    * 
@@ -32,6 +37,13 @@ public class AxesMetadataExample
    */
   private static class NewMaths extends Maths
   {
+    /**
+     * add operator - puts axes metadata into the results
+     * @param a
+     * @param b
+     * @param o output can be null - in which case, a new dataset is created
+     * @return a + b, addition of a and b
+     */
     public static Dataset add(final Object a, final Object b, final Dataset o)
     {
       // perform the basic operation
@@ -51,7 +63,7 @@ public class AxesMetadataExample
       return res;
     }
 
-    public static Dataset add2(final Object a, final Object b, final Dataset o)
+    public static Dataset performWithInterpolation(final Object a, final Object b, final Dataset o, final OperationPerformer operation)
     {
       final Object operandA;
       final Object operandB;
@@ -155,6 +167,7 @@ public class AxesMetadataExample
                 useA = false;
               }
 
+              // ok, decide which way around things are
               final Dataset indices = useA ? bIndices : aIndices;
               final Dataset values = useA ? db : da;
               final IDataset masterIndices = useA ? aIndices : bIndices;
@@ -200,7 +213,7 @@ public class AxesMetadataExample
       }
 
       // perform the basic operation
-      final Dataset res = Maths.add(operandA, operandB, o);
+      final Dataset res = operation.perform(operandA, operandB, o);
 
       // ok, we'll use this as the target metadata
       if (operandA instanceof IDataset)
@@ -214,8 +227,18 @@ public class AxesMetadataExample
       }
 
       return res;
-    }
+    }    
 
+    /**
+     * Linearly interpolate values at points in a 1D dataset corresponding to given coordinates, includes
+     * axesMetadata in results
+     * @param x input 1-D coordinate dataset (must be ordered)
+     * @param d input 1-D dataset
+     * @param x0 coordinate values
+     * @param left value to use when x0 lies left of domain. If null, then interpolate to zero by using leftmost interval
+     * @param right value to use when x0 lies right of domain. If null, then interpolate to zero by using rightmost interval
+     * @return interpolated values
+     */    
     public static Dataset interpolate(final Dataset x, final Dataset d,
         final IDataset x0, Number left, Number right)
     {
@@ -223,7 +246,7 @@ public class AxesMetadataExample
       // ok, do the math
       final Dataset res = Maths.interpolate(x, d, x0, left, right);
 
-      // ok, we'll use this as the target metadata
+      // ok, use the coordinate values as the target metadata
       AxesMetadata targetAxes = new AxesMetadataImpl();
       targetAxes.initialize(1);
       targetAxes.setAxis(0, x0);
@@ -468,7 +491,7 @@ public class AxesMetadataExample
   }
 
   @Test
-  public void testNonSyncedAxesOperationInNewMaths2()
+  public void testNonSyncedAxesOperationInNewMathsWithAutoInterpolation()
   {
     // this test verifies that the add operation interpolates the
     // non-synced input data
@@ -514,21 +537,14 @@ public class AxesMetadataExample
     assertEquals("B components equal length", timestampsB.getSize(), speedsB
         .getSize());
 
-    // check addition fails for dataset of unequal length
-    try
-    {
-      Maths.add(speedsA, speedsB);
-      fail("An exception should have been thrown");
-    }
-    catch (IllegalArgumentException ex)
-    {
-      assertEquals("Correct reason",
-          "A shape's dimension was not one or equal to maximum", ex
-              .getMessage());
-    }
-
+    OperationPerformer doAdd = new OperationPerformer(){
+      @Override
+      public Dataset perform(Object a, Object b, Dataset o)
+      {
+        return Maths.add(a, b, o);
+      }};
     // now add them, without doing interpolation first
-    Dataset sumBC = NewMaths.add2(speedsA, speedsB, null);
+    Dataset sumBC = NewMaths.performWithInterpolation(speedsA, speedsB, null, doAdd);
     sumBC.setName("Sum of A and B, taken at B timestamps");
     printTimedDataset(sumBC);
     AxesMetadata sumAxes = sumBC.getFirstMetadata(AxesMetadata.class);
@@ -538,6 +554,26 @@ public class AxesMetadataExample
     // check results, via sampling
     assertEquals("correct value", 5.5d, sumBC.getDouble(1), 0.001); // speed sum at 200
     assertEquals("correct value", 9.75d, sumBC.getDouble(2), 0.001); // speed sum at 250
+
+    // consider multiplication
+    OperationPerformer doMultiply = new OperationPerformer(){
+      @Override
+      public Dataset perform(Object a, Object b, Dataset o)
+      {
+        return Maths.multiply(a, b, o);
+      }};
+    // now add them, without doing interpolation first
+    Dataset productBC = NewMaths.performWithInterpolation(speedsA, speedsB, null, doMultiply);
+    productBC.setName("Product of A and B, taken at B timestamps");
+    printTimedDataset(productBC);
+    AxesMetadata productAxes = productBC.getFirstMetadata(AxesMetadata.class);
+    assertNotNull("timestamps present in results", productAxes);
+    assertEquals("correct timestamps", timestampsB, productAxes.getAxis(0)[0]);
+
+    // check results, via sampling
+    assertEquals("correct value", 6d, productBC.getDouble(1), 0.001); // speed product at 200
+    assertEquals("correct value", 14d, productBC.getDouble(3), 0.001); // speed product at 300
+
   }
 
   public void header(String title)
