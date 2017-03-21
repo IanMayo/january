@@ -1,139 +1,279 @@
 package org.eclipse.january.examples.dataset;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.fail;
+
 import java.util.Arrays;
 
-import org.eclipse.january.dataset.CompoundDataset;
+import org.eclipse.january.DatasetException;
 import org.eclipse.january.dataset.Dataset;
 import org.eclipse.january.dataset.DatasetFactory;
+import org.eclipse.january.dataset.DatasetUtils;
+import org.eclipse.january.dataset.IDataset;
+import org.eclipse.january.dataset.ILazyDataset;
 import org.eclipse.january.dataset.IndexIterator;
 import org.eclipse.january.dataset.LongDataset;
 import org.eclipse.january.dataset.Maths;
 import org.eclipse.january.metadata.AxesMetadata;
 import org.eclipse.january.metadata.internal.AxesMetadataImpl;
-import org.eclipse.uomo.units.SI;
+import org.junit.Before;
 import org.junit.Test;
-import org.unitsofmeasurement.unit.Unit;
 
-import junit.framework.TestCase;
-
-public class AxesMetadataExample extends TestCase
+public class AxesMetadataExample
 {
 
-  public static void main(String[] args)
-  {
-    AxesMetadataExample subject = new AxesMetadataExample();
-    subject.testSimpleOperation();
-    subject.testCompoundDataset();
-    subject.testUnitsAwareOperations();
-    subject.testNonSyncedAxesOperation();
-  }
-
+  /**
+   * experiment with extending maths processing to be AxesMetadata aware
+   * 
+   * @author ian
+   *
+   */
   private static class NewMaths extends Maths
   {
-    public static Dataset multiply(final Object a, final Object b,
-        final Dataset o)
-    {
-      // TODO: check for compliant units?
-      Dataset res = Maths.multiply(a, b, o);
-
-      // TODO: if there are indices, we need to check they of the same
-      // type, and to do some interpolation if they aren't synced
-
-      // do the necessary metadata type manipulation for the output set
-      if (a instanceof Dataset && b instanceof Dataset)
-      {
-        Dataset aD = (Dataset) a;
-        Dataset bD = (Dataset) b;
-        UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
-        UomMetadata bMetadata = bD.getFirstMetadata(UomMetadata.class);
-        Unit<?> outUnit = aMetadata.getUnit().multiply(bMetadata.getUnit());
-        res.addMetadata(new UomMetadata(outUnit));
-      }
-
-      return res;
-    }
-
     public static Dataset add(final Object a, final Object b, final Dataset o)
     {
-      // TODO: check for compliant units?
-      Dataset res = Maths.add(a, b, o);
+      // perform the basic operation
+      final Dataset res = Maths.add(a, b, o);
 
-      // do the necessary metadata type manipulation for the output set
-      if (a instanceof Dataset && b instanceof Dataset)
+      // ok, we'll use this as the target metadata
+      if (a instanceof IDataset)
       {
-        Dataset aD = (Dataset) a;
-        UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
-        Unit<?> outUnit = aMetadata.getUnit();
-        res.addMetadata(new UomMetadata(outUnit));
+        final IDataset ds = (IDataset) a;
+        final AxesMetadata targetAxes = ds.getFirstMetadata(AxesMetadata.class);
+        if (targetAxes != null)
+        {
+          res.addMetadata(targetAxes);
+        }
       }
+
       return res;
     }
 
-    public static Dataset subtract(final Object a, final Object b,
-        final Dataset o)
+    public static Dataset add2(final Object a, final Object b, final Dataset o)
     {
-      // TODO: check for compliant units?
-      Dataset res = Maths.subtract(a, b, o);
+      final Object operandA;
+      final Object operandB;
 
-      // TODO: if there are indices, we need to check they of the same
-      // type, and to do some interpolation if they aren't synced
-
-      // do the necessary metadata type manipulation for the output set
+      // ok, check if we've received datasets
       if (a instanceof Dataset && b instanceof Dataset)
       {
-        Dataset aD = (Dataset) a;
-        UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
-        Unit<?> outUnit = aMetadata.getUnit();
-        res.addMetadata(new UomMetadata(outUnit));
+        final Dataset da = (Dataset) a;
+        final Dataset db = (Dataset) b;
+        final AxesMetadata axesA = da.getFirstMetadata(AxesMetadata.class);
+        final AxesMetadata axesB = db.getFirstMetadata(AxesMetadata.class);
+
+        if (axesA != null && axesB != null)
+        {
+          // ok, we've got indexed data. see if they match
+          ILazyDataset aLazyIndices = axesA.getAxis(0)[0];
+          ILazyDataset bLazyIndices = axesB.getAxis(0)[0];
+
+          // ok, if they're different length then we know they're non-synced
+          final boolean needInterp;
+          if (aLazyIndices.getSize() != bLazyIndices.getSize())
+          {
+            // ok, need syncing
+            needInterp = true;
+          }
+          else if (aLazyIndices.equals(bLazyIndices))
+          {
+            // ok, they're equal, no need to interp
+            needInterp = false;
+          }
+          else
+          {
+            // values don't match, need to interp
+            needInterp = true;
+          }
+
+          if (needInterp)
+          {
+            // ok, see which dataset has the wider range
+            // first we need to load the data
+            Dataset aIndices = null;
+            Dataset bIndices = null;
+            boolean success = false;
+            try
+            {
+              aIndices = DatasetUtils.sliceAndConvertLazyDataset(
+                  aLazyIndices);
+              bIndices = DatasetUtils.sliceAndConvertLazyDataset(
+                  bLazyIndices);
+              success = true;
+            }
+            catch (DatasetException e)
+            {
+              // TODO Auto-generated catch block
+              e.printStackTrace();
+            }
+            
+            if(success)
+            {
+              final double aMin = aIndices.min(false).doubleValue();
+              final double aMax = aIndices.max(false).doubleValue();
+
+              final double bMin = bIndices.min(false).doubleValue();
+              final double bMax = bIndices.max(false).doubleValue();
+
+              // do we use "a" as the time-master?
+              final boolean useA;
+
+              if (aMax < bMin || aMin > bMax)
+              {
+                // keep compiler happy
+                operandA = null;
+                operandB = null;
+
+                // datasets don't overlap
+                throw new IllegalArgumentException(
+                    "The indices of the dataset do not overlap");
+              }
+              else if (aMin <= bMin && aMax >= bMax)
+              {
+                // ok, use a, it contains b
+                useA = false;
+              }
+              else if (bMin < aMin && bMax > aMax)
+              {
+                // ok, use b, it contains a
+                useA = true;
+              }
+              else if (aIndices.getSize() > bIndices.getSize())
+              {
+                // ok, one isn't contained within the other. Sort out which to use
+                // initially, take the longer dataset. In the future use the one
+                // with the most measurements in the overlapping period
+
+                // ok, use a
+                useA = true;
+              }
+              else
+              {
+                // ok, use b
+                useA = false;
+              }
+
+              final Dataset indices = useA ? bIndices : aIndices;
+              final Dataset values = useA ? db : da;
+              final IDataset masterIndices = useA ? aIndices : bIndices;
+              final IDataset masterValues = useA ? da : db;
+              
+              
+              // ok, now do interpolation
+              Dataset interpolatedValues = Maths.interpolate(indices, values,
+                  masterIndices, null, null);
+              operandA = masterValues;
+              operandB = interpolatedValues;
+              
+              // remember the output axes, since we'll put them into the results
+              interpolatedValues.addMetadata(masterValues.getFirstMetadata(AxesMetadata.class));
+            }
+            else
+            {
+              // an exception was thrown while trying to determine the 
+              // indices. See if the parent class can handle it
+              operandA = da;
+              operandB = db;
+            }
+          }
+          else
+          {
+            // no interpolation needed
+            operandA = da;
+            operandB = db;
+          }
+        }
+        else
+        {
+          // we don't know the axes, so forget about syncing
+          operandA = da;
+          operandB = db;
+        }
       }
+      else
+      {
+        // we can only handle datasets, leave them to it.
+        operandA = a;
+        operandB = b;
+      }
+
+      // perform the basic operation
+      final Dataset res = Maths.add(operandA, operandB, o);
+
+      // ok, we'll use this as the target metadata
+      if (operandA instanceof IDataset)
+      {
+        final IDataset ds = (IDataset) operandA;
+        final AxesMetadata targetAxes = ds.getFirstMetadata(AxesMetadata.class);
+        if (targetAxes != null)
+        {
+          res.addMetadata(targetAxes);
+        }
+      }
+
       return res;
     }
 
-    public static Dataset divide(final Object a, final Object b,
-        final Dataset o)
+    public static Dataset interpolate(final Dataset x, final Dataset d,
+        final IDataset x0, Number left, Number right)
     {
-      Dataset res = Maths.divide(a, b, o);
 
-      // do the necessary metadata type manipulation for the output set
-      if (a instanceof Dataset && b instanceof Dataset)
-      {
-        Dataset aD = (Dataset) a;
-        Dataset bD = (Dataset) b;
-        UomMetadata aMetadata = aD.getFirstMetadata(UomMetadata.class);
-        UomMetadata bMetadata = bD.getFirstMetadata(UomMetadata.class);
-        Unit<?> outUnit = aMetadata.getUnit().divide(bMetadata.getUnit());
-        res.addMetadata(new UomMetadata(outUnit));
-      }
+      // ok, do the math
+      final Dataset res = Maths.interpolate(x, d, x0, left, right);
+
+      // ok, we'll use this as the target metadata
+      AxesMetadata targetAxes = new AxesMetadataImpl();
+      targetAxes.initialize(1);
+      targetAxes.setAxis(0, x0);
+      res.addMetadata(targetAxes);
 
       return res;
     }
+
   }
 
-  public void testSimpleOperation()
+  @Before
+  public void before()
+  {
+    // prevent missing logger from being reported
+    Utils.suppressSLF4JError();
+  }
+
+  @Test
+  public void testSyncedOperations()
   {
     // configure Dataset A
     Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l,
         200l, 300l));
-    timestampsA.addMetadata(new UomMetadata(SI.SECOND));
     Dataset speedsA = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
     AxesMetadata axesMetadataA = new AxesMetadataImpl();
     axesMetadataA.initialize(1);
     axesMetadataA.setAxis(0, timestampsA);
     speedsA.addMetadata(axesMetadataA);
-    speedsA.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
     speedsA.setName("speedsA");
 
     // configure Dataset B
     Dataset timestampsB = DatasetFactory.createFromList(Arrays.asList(100l,
         200l, 300l));
-    timestampsB.addMetadata(new UomMetadata(SI.SECOND));
     Dataset speedsB = DatasetFactory.createFromList(Arrays.asList(2d, 4d, 8d));
     AxesMetadata axesMetadataB = new AxesMetadataImpl();
     axesMetadataB.initialize(1);
     axesMetadataB.setAxis(0, timestampsB);
     speedsB.addMetadata(axesMetadataB);
-    speedsB.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
     speedsB.setName("speedsB");
+
+    // ok, we need them to be of equal length
+    assertEquals("times equal length", timestampsA.getSize(), timestampsB
+        .getSize());
+    assertEquals("speeds equal length", speedsA.getSize(), speedsB.getSize());
+
+    // verify we have the correct length of axis metadata
+    assertEquals("A components equal length", timestampsA.getSize(), speedsA
+        .getSize());
+    assertEquals("B components equal length", timestampsB.getSize(), speedsB
+        .getSize());
 
     header("Simple operations");
 
@@ -142,113 +282,17 @@ public class AxesMetadataExample extends TestCase
     printTimedDataset(speedsB);
 
     // non-destructive addition (loses units)
-    Dataset sumAB2 = Maths.add(speedsA, speedsB);
-    Dataset productAB2 = Maths.multiply(speedsA, speedsB);
+    Dataset sumAB = Maths.add(speedsA, speedsB);
+    Dataset productAB = Maths.multiply(speedsA, speedsB);
 
-    // destructive addition (amends speedsA)
-    Dataset sumAB = speedsA.iadd(speedsB);
-    Dataset productAB = speedsA.iadd(speedsB);
+    // check the results
+    assertEquals("Results correct length", sumAB.getSize(), speedsA.getSize());
+    assertEquals("Results correct length", productAB.getSize(), speedsA
+        .getSize());
 
     // output results
-    printTimedDataset(speedsA);
     printTimedDataset(sumAB);
     printTimedDataset(productAB);
-    printTimedDataset(sumAB2);
-    printTimedDataset(productAB2);
-  }
-
-  public void testUnitsAwareOperations()
-  {
-    Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l,
-        200l, 300l));
-    timestampsA.addMetadata(new UomMetadata(SI.SECOND));
-
-    AxesMetadata axesMetadataA = new AxesMetadataImpl();
-    axesMetadataA.initialize(1);
-    axesMetadataA.setAxis(0, timestampsA);
-
-    Dataset elapsedTime = DatasetFactory.createFromList(Arrays.asList(100l,
-        200l, 300l));
-    elapsedTime.addMetadata(axesMetadataA);
-    elapsedTime.addMetadata(new UomMetadata(SI.SECOND));
-    elapsedTime.setName("ElapsedTime");
-
-    Dataset speed = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
-    speed.addMetadata(axesMetadataA);
-    speed.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
-    speed.setName("Speed");
-
-    header("Unit-aware operations");
-
-    printTimedDataset(elapsedTime);
-    printTimedDataset(speed);
-    printTimedDataset(NewMaths.multiply(speed, elapsedTime, null));
-    printTimedDataset(NewMaths.divide(speed, elapsedTime, null));
-    printTimedDataset(NewMaths.add(speed, elapsedTime, null));
-    printTimedDataset(NewMaths.subtract(speed, elapsedTime, null));
-  }
-
-  public void testCompoundDataset()
-  {
-
-    // configure Dataset A
-    Dataset speedsA = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
-    speedsA.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
-    speedsA.setName("speedsA");
-
-    Dataset engineTemperatureA = DatasetFactory.createFromList(Arrays.asList(
-        56d, 58d, 62d));
-    engineTemperatureA.addMetadata(new UomMetadata(SI.CELSIUS));
-    engineTemperatureA.setName("engineTemperatureA");
-
-    Dataset fuelTankVolumeA = DatasetFactory.createFromList(Arrays.asList(0.3d,
-        0.28d, 0.22d));
-    fuelTankVolumeA.addMetadata(new UomMetadata(SI.CUBIC_METRE));
-    fuelTankVolumeA.setName("fuelTankVolumeA");
-
-    CompoundDataset compoundDatasetA = DatasetFactory.createCompoundDataset(
-        speedsA, engineTemperatureA, fuelTankVolumeA);
-    AxesMetadata axesMetadataA = new AxesMetadataImpl();
-    axesMetadataA.initialize(1);
-    Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l,
-        200l, 300l));
-    timestampsA.addMetadata(new UomMetadata(SI.SECOND));
-    axesMetadataA.setAxis(0, timestampsA);
-    compoundDatasetA.addMetadata(axesMetadataA);
-    compoundDatasetA.setName("compoundDatasetA");
-
-    // configure Dataset B
-    Dataset speedsB = DatasetFactory.createFromList(Arrays.asList(2d, 4d, 8d));
-    speedsB.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
-    speedsB.setName("speedsB");
-
-    Dataset engineTemperatureB = DatasetFactory.createFromList(Arrays.asList(
-        12d, 34d, 35d));
-    engineTemperatureB.addMetadata(new UomMetadata(SI.CELSIUS));
-    engineTemperatureB.setName("engineTemperatureB");
-
-    Dataset fuelTankVolumeB = DatasetFactory.createFromList(Arrays.asList(0.5d,
-        0.46d, 0.43d));
-    fuelTankVolumeB.addMetadata(new UomMetadata(SI.CUBIC_METRE));
-    fuelTankVolumeB.setName("fuelTankVolumeB");
-
-    CompoundDataset compoundDatasetB = DatasetFactory.createCompoundDataset(
-        speedsB, engineTemperatureB, fuelTankVolumeB);
-    AxesMetadata axesMetadataB = new AxesMetadataImpl();
-    axesMetadataB.initialize(1);
-    Dataset timestampsB = DatasetFactory.createFromList(Arrays.asList(100l,
-        200l, 300l));
-    timestampsB.addMetadata(new UomMetadata(SI.SECOND));
-    axesMetadataB.setAxis(0, timestampsB);
-    compoundDatasetB.addMetadata(axesMetadataB);
-    compoundDatasetB.setName("compoundDatasetB");
-
-    // Add B to A
-    CompoundDataset sumAB = compoundDatasetA.iadd(compoundDatasetB);
-    sumAB.setName("sumAB");
-
-    header("Compound datasets");
-    printTimedCompoundDataset(sumAB);
   }
 
   @Test
@@ -275,76 +319,246 @@ public class AxesMetadataExample extends TestCase
     axesMetadataB.initialize(1);
     axesMetadataB.setAxis(0, timestampsB);
     speedsB.addMetadata(axesMetadataB);
-    speedsB.addMetadata(new UomMetadata(SI.METRES_PER_SECOND));
     speedsB.setName("speedsB, with timestamps");
 
     header("Non synced operations");
 
     // show initial values
-    printTimedDataset(timestampsA);
-    printTimedDataset(timestampsB);
-
     printTimedDataset(speedsA);
     printTimedDataset(speedsB);
 
-    // non-destructive addition (loses units)
-    // Dataset sumAB2 = Maths.add(speedsA, speedsB);
-    // operation fails, since datasets aren't of same size
-    // printTimedDataset(sumAB2);
+    // ok - verify they're not synced to start with
+    assertNotEquals("times different length", timestampsA.getSize(), timestampsB
+        .getSize());
+    assertNotEquals("speeds different length", speedsA.getSize(), speedsB
+        .getSize());
+
+    // verify we have the correct length of axis metadata
+    assertEquals("A components equal length", timestampsA.getSize(), speedsA
+        .getSize());
+    assertEquals("B components equal length", timestampsB.getSize(), speedsB
+        .getSize());
+
+    // check addition fails for dataset of unequal length
+    try
+    {
+      Maths.add(speedsA, speedsB);
+      fail("An exception should have been thrown");
+    }
+    catch (IllegalArgumentException ex)
+    {
+      assertEquals("Correct reason",
+          "A shape's dimension was not one or equal to maximum", ex
+              .getMessage());
+    }
 
     // ok, produce interpolated datasets
-    Dataset interpdata = Maths.interpolate(timestampsA, speedsA, timestampsB,
-        null, null);
-    interpdata.setName("A values at B timestamps");
-    printTimedDataset(interpdata);
+    Dataset speedsC = Maths.interpolate(timestampsA, speedsA, timestampsB, null,
+        null);
+    speedsC.setName("A values at B timestamps");
+    printTimedDataset(speedsC);
+
+    assertEquals("speeds equal length", speedsC.getSize(), speedsB.getSize());
+
+    // check results, via sampling
+    assertEquals("correct value", 1.5d, speedsC.getDouble(1), 0.001); // A speed at 200
+    assertEquals("correct value", 1.75d, speedsC.getDouble(2), 0.001); // A speed at 250
 
     // put the timestamps back in
-    interpdata.addMetadata(axesMetadataB);
-    interpdata.setName("A values at B timestamps, with timestamp metadata");
-    printTimedDataset(interpdata);
+    speedsC.addMetadata(axesMetadataB);
+    speedsC.setName("A values at B timestamps, with timestamp metadata");
+    printTimedDataset(speedsC);
 
     // now add them
-    Dataset sumAB3 = Maths.add(speedsB, interpdata);
-    interpdata.setName("Sum of A and B, taken at B timestamps");
-    printTimedDataset(sumAB3);
+    Dataset sumBC = Maths.add(speedsB, speedsC);
+    sumBC.setName("Sum of A and B, taken at B timestamps");
+    printTimedDataset(sumBC);
 
     // put the axes metadata into the results
-    sumAB3.addMetadata(axesMetadataB);
-    interpdata.setName(
-        "Sum of A and B, taken at B timestamps, with timestamp metadata");
-    printTimedDataset(sumAB3);
+    sumBC.addMetadata(axesMetadataB);
+    sumBC.setName(
+        "Sum of A(C) and B, taken at B timestamps, with timestamp metadata");
+    printTimedDataset(sumBC);
+  }
 
+  @Test
+  public void testNonSyncedAxesOperationInNewMaths()
+  {
+    // configure Dataset A
+    Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l,
+        300l, 500l));
+    timestampsA.setName("A timestamps");
+    Dataset speedsA = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
+    AxesMetadata axesMetadataA = new AxesMetadataImpl();
+    axesMetadataA.initialize(1);
+    axesMetadataA.setAxis(0, timestampsA);
+    speedsA.addMetadata(axesMetadataA);
+    speedsA.setName("speedsA, with timestamps");
+
+    // configure Dataset B
+    Dataset timestampsB = DatasetFactory.createFromList(Arrays.asList(150l,
+        200l, 250l, 300L, 350L));
+    timestampsB.setName("B timestamps");
+    Dataset speedsB = DatasetFactory.createFromList(Arrays.asList(2d, 4d, 8d,
+        12d, 14d));
+    AxesMetadata axesMetadataB = new AxesMetadataImpl();
+    axesMetadataB.initialize(1);
+    axesMetadataB.setAxis(0, timestampsB);
+    speedsB.addMetadata(axesMetadataB);
+    speedsB.setName("speedsB, with timestamps");
+
+    header("Non synced operations");
+
+    // show initial values
+    printTimedDataset(speedsA);
+    printTimedDataset(speedsB);
+
+    // ok - verify they're not synced to start with
+    assertNotEquals("times different length", timestampsA.getSize(), timestampsB
+        .getSize());
+    assertNotEquals("speeds different length", speedsA.getSize(), speedsB
+        .getSize());
+
+    // verify we have the correct length of axis metadata
+    assertEquals("A components equal length", timestampsA.getSize(), speedsA
+        .getSize());
+    assertEquals("B components equal length", timestampsB.getSize(), speedsB
+        .getSize());
+
+    // check addition fails for dataset of unequal length
+    try
+    {
+      Maths.add(speedsA, speedsB);
+      fail("An exception should have been thrown");
+    }
+    catch (IllegalArgumentException ex)
+    {
+      assertEquals("Correct reason",
+          "A shape's dimension was not one or equal to maximum", ex
+              .getMessage());
+    }
+
+    // ok, produce interpolated datasets
+    Dataset speedsC = NewMaths.interpolate(timestampsA, speedsA, timestampsB,
+        null, null);
+    speedsC.setName("A values at B timestamps");
+    printTimedDataset(speedsC);
+
+    assertEquals("speeds equal length", speedsC.getSize(), speedsB.getSize());
+    final AxesMetadata speedsCAxes = speedsC.getFirstMetadata(
+        AxesMetadata.class);
+    assertNotNull("timestamps present in results", speedsCAxes);
+    assertEquals("correct timestamps", timestampsB, speedsCAxes.getAxis(0)[0]);
+
+    // check results, via sampling
+    assertEquals("correct value", 1.5d, speedsC.getDouble(1), 0.001); // A speed at 200
+    assertEquals("correct value", 1.75d, speedsC.getDouble(2), 0.001); // A speed at 250
+
+    // now add them
+    Dataset sumBC = NewMaths.add(speedsB, speedsC, null);
+    sumBC.setName("Sum of A and B, taken at B timestamps");
+    printTimedDataset(sumBC);
+    AxesMetadata sumAxes = sumBC.getFirstMetadata(AxesMetadata.class);
+    assertNotNull("timestamps present in results", sumAxes);
+    assertEquals("correct timestamps", timestampsB, sumAxes.getAxis(0)[0]);
+
+    // check results, via sampling
+    assertEquals("correct value", 5.5d, sumBC.getDouble(1), 0.001); // speed sum at 200
+    assertEquals("correct value", 9.75d, sumBC.getDouble(2), 0.001); // speed sum at 250
+  }
+
+  @Test
+  public void testNonSyncedAxesOperationInNewMaths2()
+  {
+    // this test verifies that the add operation interpolates the
+    // non-synced input data
+
+    // configure Dataset A
+    Dataset timestampsA = DatasetFactory.createFromList(Arrays.asList(100l,
+        300l, 500l));
+    timestampsA.setName("A timestamps");
+    Dataset speedsA = DatasetFactory.createFromList(Arrays.asList(1d, 2d, 3d));
+    AxesMetadata axesMetadataA = new AxesMetadataImpl();
+    axesMetadataA.initialize(1);
+    axesMetadataA.setAxis(0, timestampsA);
+    speedsA.addMetadata(axesMetadataA);
+    speedsA.setName("speedsA, with timestamps");
+
+    // configure Dataset B
+    Dataset timestampsB = DatasetFactory.createFromList(Arrays.asList(150l,
+        200l, 250l, 300L, 350L));
+    timestampsB.setName("B timestamps");
+    Dataset speedsB = DatasetFactory.createFromList(Arrays.asList(2d, 4d, 8d,
+        12d, 14d));
+    AxesMetadata axesMetadataB = new AxesMetadataImpl();
+    axesMetadataB.initialize(1);
+    axesMetadataB.setAxis(0, timestampsB);
+    speedsB.addMetadata(axesMetadataB);
+    speedsB.setName("speedsB, with timestamps");
+
+    header("Non synced operations (auto interpolation)");
+
+    // show initial values
+    printTimedDataset(speedsA);
+    printTimedDataset(speedsB);
+
+    // ok - verify they're not synced to start with
+    assertNotEquals("times different length", timestampsA.getSize(), timestampsB
+        .getSize());
+    assertNotEquals("speeds different length", speedsA.getSize(), speedsB
+        .getSize());
+
+    // verify we have the correct length of axis metadata
+    assertEquals("A components equal length", timestampsA.getSize(), speedsA
+        .getSize());
+    assertEquals("B components equal length", timestampsB.getSize(), speedsB
+        .getSize());
+
+    // check addition fails for dataset of unequal length
+    try
+    {
+      Maths.add(speedsA, speedsB);
+      fail("An exception should have been thrown");
+    }
+    catch (IllegalArgumentException ex)
+    {
+      assertEquals("Correct reason",
+          "A shape's dimension was not one or equal to maximum", ex
+              .getMessage());
+    }
+
+    // now add them, without doing interpolation first
+    Dataset sumBC = NewMaths.add2(speedsA, speedsB, null);
+    sumBC.setName("Sum of A and B, taken at B timestamps");
+    printTimedDataset(sumBC);
+    AxesMetadata sumAxes = sumBC.getFirstMetadata(AxesMetadata.class);
+    assertNotNull("timestamps present in results", sumAxes);
+    assertEquals("correct timestamps", timestampsB, sumAxes.getAxis(0)[0]);
+
+    // check results, via sampling
+    assertEquals("correct value", 5.5d, sumBC.getDouble(1), 0.001); // speed sum at 200
+    assertEquals("correct value", 9.75d, sumBC.getDouble(2), 0.001); // speed sum at 250
   }
 
   public void header(String title)
   {
+    System.out.println();
     System.out.println("=== " + title + " ===");
   }
 
   public void printTimedDataset(Dataset dataset)
   {
-    printTimedDataset(dataset, dataset.getFirstMetadata(AxesMetadata.class));
-  }
-
-  public void printTimedDataset(Dataset dataset, AxesMetadata axesMetadata)
-  {
+    final AxesMetadata axesMetadata = dataset.getFirstMetadata(
+        AxesMetadata.class);
     IndexIterator iterator = dataset.getIterator();
-    UomMetadata uomMetadata = dataset.getFirstMetadata(UomMetadata.class);
-    String unit = uomMetadata != null ? uomMetadata.getUnit().toString() : "";
 
-    final String axisUnit;
     final LongDataset axisDataset;
     if (axesMetadata != null && axesMetadata.getAxes().length > 0)
     {
       axisDataset = (LongDataset) axesMetadata.getAxes()[0];
-      UomMetadata axusUomMetadata = axisDataset.getFirstMetadata(
-          UomMetadata.class);
-      axisUnit = axusUomMetadata != null ? axusUomMetadata.getUnit().toString()
-          : "";
     }
     else
     {
-      axisUnit = "N/A";
       axisDataset = null;
     }
 
@@ -354,31 +568,17 @@ public class AxesMetadataExample extends TestCase
       final String indexVal;
       if (axisDataset != null)
       {
-        indexVal = axisDataset.getLong(iterator.index) + "[" + axisUnit + "]";
+        indexVal = "" + axisDataset.getLong(iterator.index);
       }
       else
       {
         indexVal = "N/A";
       }
 
-      System.out.print(indexVal + " : " + dataset.getDouble(iterator.index)
-          + "[" + unit + "]");
+      System.out.print(indexVal + " : " + dataset.getDouble(iterator.index));
       System.out.print("; ");
     }
     System.out.println();
   }
 
-  public void printTimedCompoundDataset(CompoundDataset compoundDataset)
-  {
-    AxesMetadata axesMetadata = compoundDataset.getFirstMetadata(
-        AxesMetadata.class);
-    int size = compoundDataset.getElementsPerItem();
-    System.out.println(compoundDataset.getName() + "{");
-    for (int i = 0; i < size; i++)
-    {
-      System.out.print("\t");
-      printTimedDataset(compoundDataset.getElements(i), axesMetadata);
-    }
-    System.out.println("}");
-  }
 }
