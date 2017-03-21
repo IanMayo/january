@@ -24,8 +24,20 @@ import org.junit.Test;
 public class AxesMetadataExample
 {
 
+  /** we wish the interpolation function to be ignorant of the specific 
+   * mathematical operation being conducted. This interface lets that
+   * detail be hidden
+   *
+   */
   public static interface OperationPerformer
   {
+    /** perform some operation on datasets and and b.  If an output
+     * dataset is provided, store the results in there.
+     * @param a
+     * @param b
+     * @param o
+     * @return
+     */
     public Dataset perform(final Object a, final Object b, final Dataset o);
   }
   
